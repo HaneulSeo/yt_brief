@@ -14,6 +14,7 @@ from .pipeline import (
     backtest_stage,
     discover_videos,
     extract_stage,
+    infer_recommendations_stage,
     parse_target_dates_stage,
     resolve_channels,
     transcripts_stage,
@@ -64,6 +65,18 @@ def cmd_extract(db: str = "ytchannelpickcheck.db", use_llm: bool = False, start_
     extract_stage(db, use_llm=use_llm)
 
 
+
+
+@app.command("infer-recommendations")
+def cmd_infer_recommendations(
+    start_date: str = typer.Option(...),
+    end_date: str = typer.Option(...),
+    db: str = "ytchannelpickcheck.db",
+    overwrite: bool = False,
+    video_id: str = "",
+):
+    infer_recommendations_stage(db, start_date, end_date, overwrite=overwrite, video_id=video_id or None)
+
 @app.command("backtest")
 def cmd_backtest(
     db: str = "ytchannelpickcheck.db",
@@ -72,8 +85,9 @@ def cmd_backtest(
     close_hit: float = 0.05,
     start_date: str = "",
     end_date: str = "",
+    source: str = "mentions",
 ):
-    backtest_stage(db, week_window=week_window, intraday_hit=intraday_hit, close_hit=close_hit)
+    backtest_stage(db, week_window=week_window, intraday_hit=intraday_hit, close_hit=close_hit, source=source)
 
 
 @app.command("analyze")

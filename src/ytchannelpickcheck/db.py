@@ -83,6 +83,22 @@ CREATE TABLE IF NOT EXISTS extracted_picks (
   extraction_created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(video_id, normalized_name, ticker, pick_rank, is_primary_recommendation)
 );
+CREATE TABLE IF NOT EXISTS inferred_recommendations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  video_id TEXT NOT NULL,
+  rec_rank INTEGER NOT NULL,
+  stock_name TEXT,
+  ticker TEXT,
+  market TEXT,
+  confidence TEXT NOT NULL,
+  method TEXT NOT NULL,
+  evidence_text TEXT,
+  evidence_start_sec REAL,
+  evidence_end_sec REAL,
+  source_segment_label TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE(video_id, rec_rank)
+);
 CREATE TABLE IF NOT EXISTS backtest_results (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   video_id TEXT,
@@ -125,6 +141,8 @@ CREATE TABLE IF NOT EXISTS analytics_cache (
 CREATE INDEX IF NOT EXISTS idx_videos_channel_pub ON videos(channel_id, published_at_kst);
 CREATE INDEX IF NOT EXISTS idx_target_dates_date ON target_dates(target_date_kst);
 CREATE INDEX IF NOT EXISTS idx_picks_ticker ON extracted_picks(ticker);
+CREATE INDEX IF NOT EXISTS idx_inferred_video_id ON inferred_recommendations(video_id);
+CREATE INDEX IF NOT EXISTS idx_inferred_ticker ON inferred_recommendations(ticker);
 CREATE INDEX IF NOT EXISTS idx_backtest_ticker_date ON backtest_results(ticker, target_date_kst);
 """
 
@@ -139,6 +157,10 @@ def init_db(db_path: str | Path) -> None:
     with connect(db_path) as conn:
         conn.executescript(SCHEMA_SQL)
         conn.commit()
+
+
+def ensure_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(SCHEMA_SQL)
 
 
 @contextmanager
