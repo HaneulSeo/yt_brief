@@ -12,16 +12,16 @@ from .extractor import extract_picks
 from .krx_mapper import map_to_ticker
 from .price_client import PriceClient
 from .target_date_parser import parse_target_date
+from .title_filter import DEFAULT_KEYWORDS, match_title
 from .transcript_client import TranscriptClient
 from .utils_time import KST, ensure_trading_day, parse_ymd
 from .youtube_channel_client import YouTubeChannelClient
 
 console = Console()
-DEFAULT_KEYWORDS = ["급등주", "내일 급등", "다음주 급등", "추천주", "관심종목", "단타 종목", "내일 볼 종목"]
 
 
 def _match_title(title: str, keywords: list[str]) -> bool:
-    return any(k in (title or "") for k in keywords)
+    return match_title(title, keywords)
 
 
 def resolve_channels(db_path: str, channels_file: str, yt_client: YouTubeChannelClient):
