@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 from rich.console import Console
 
 from .backtest import compute_backtest
 from .channels_loader import load_channels_file
-from .db import db_session
+from .db import db_session, ensure_schema
 from .extractor import extract_picks
+from .recommendation_inferer import infer_recommendations
 from .krx_mapper import map_to_ticker
 from .price_client import PriceClient
 from .target_date_parser import parse_target_date
@@ -127,14 +128,13 @@ def extract_stage(db_path: str, use_llm: bool = False):
             conn.execute("UPDATE videos SET extraction_status='success' WHERE video_id=?", (r["video_id"],))
 
 
-def backtest_stage(db_path: str, week_window: int = 5, intraday_hit: float = 0.10, close_hit: float = 0.05):
+def backtest_stage(db_path: str, week_window: int = 5, intraday_hit: float = 0.10, close_hit: float = 0.05, source: str = "mentions"):
+    if source not in {"mentions", "inferred"}:
+        raise ValueError("source must be 'mentions' or 'inferred'")
     pc = PriceClient()
     with db_session(db_path) as conn:
-        rows = conn.execute(
-            """SELECT p.video_id, p.ticker, td.target_date_kst
-               FROM extracted_picks p JOIN target_dates td ON p.video_id=td.video_id
-               WHERE p.ticker IS NOT NULL AND td.target_date_kst IS NOT NULL"""
-        ).fetchall()
+        ensure_schema(conn)
+        rows = conn.execute(_pick_source_query(source)).fetchall()
         for r in rows:
             td = parse_ymd(r["target_date_kst"])
             ohlcv = pc.get_ohlcv(r["ticker"], td.replace(day=max(1, td.day - 10)), td)
@@ -194,3 +194,70 @@ def analyze_stage(db_path: str):
         conn.execute("DELETE FROM analytics_cache")
         conn.execute("INSERT INTO analytics_cache(cache_key,payload_json) VALUES(?,?)", ("channel_summary", cs.to_json(orient="records")))
         conn.execute("INSERT INTO analytics_cache(cache_key,payload_json) VALUES(?,?)", ("date_summary", ds.to_json(orient="records")))
+
+
+def infer_recommendations_stage(
+    db_path: str,
+    start: str,
+    end: str,
+    overwrite: bool = False,
+    video_id: str | None = None,
+):
+    start_d, end_d = parse_ymd(start), parse_ymd(end)
+    with db_session(db_path) as conn:
+        ensure_schema(conn)
+        where = ["date(v.published_at_kst) BETWEEN ? AND ?"]
+        args: list[object] = [str(start_d), str(end_d)]
+        if video_id:
+            where.append("v.video_id=?")
+            args.append(video_id)
+        rows = conn.execute(
+            f"""SELECT v.video_id, v.title, v.published_at_kst, t.transcript_text
+                FROM videos v
+                LEFT JOIN transcripts t ON v.video_id=t.video_id
+                WHERE {' AND '.join(where)}""",
+            args,
+        ).fetchall()
+
+        for row in rows:
+            if not row["transcript_text"]:
+                continue
+            if overwrite:
+                conn.execute("DELETE FROM inferred_recommendations WHERE video_id=?", (row["video_id"],))
+            mentions = conn.execute(
+                "SELECT normalized_name FROM extracted_picks WHERE video_id=?",
+                (row["video_id"],),
+            ).fetchall()
+            mention_names = [m["normalized_name"] for m in mentions if m["normalized_name"]]
+            recs, _meta = infer_recommendations(row["title"] or "", row["transcript_text"], mention_names)
+            for rec in recs:
+                conn.execute(
+                    """INSERT OR REPLACE INTO inferred_recommendations(
+                        video_id, rec_rank, stock_name, ticker, market, confidence, method,
+                        evidence_text, evidence_start_sec, evidence_end_sec, source_segment_label, created_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        row["video_id"],
+                        rec.rec_rank,
+                        rec.stock_name,
+                        rec.ticker,
+                        rec.market,
+                        rec.confidence,
+                        rec.method,
+                        rec.evidence_text,
+                        rec.evidence_start_sec,
+                        rec.evidence_end_sec,
+                        rec.source_segment_label,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+
+
+def _pick_source_query(source: str) -> str:
+    if source == "mentions":
+        return """SELECT DISTINCT p.video_id, p.ticker, td.target_date_kst
+               FROM extracted_picks p JOIN target_dates td ON p.video_id=td.video_id
+               WHERE p.ticker IS NOT NULL AND td.target_date_kst IS NOT NULL"""
+    return """SELECT DISTINCT ir.video_id, ir.ticker, td.target_date_kst
+           FROM inferred_recommendations ir JOIN target_dates td ON ir.video_id=td.video_id
+           WHERE ir.ticker IS NOT NULL AND td.target_date_kst IS NOT NULL"""
