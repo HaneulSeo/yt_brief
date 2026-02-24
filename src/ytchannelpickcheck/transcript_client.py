@@ -7,6 +7,21 @@ class TranscriptClient:
     def __init__(self):
         self.api = YouTubeTranscriptApi()
 
+    @staticmethod
+    def _snip_get(snippet, key: str, default=None):
+        if isinstance(snippet, dict):
+            return snippet.get(key, default)
+        return getattr(snippet, key, default)
+
+    def _join_text(self, snippets) -> str:
+        return " ".join(
+            [
+                text
+                for text in (self._snip_get(snippet, "text", "") for snippet in snippets)
+                if text
+            ]
+        )
+
     def fetch(self, video_id: str) -> dict:
         try:
             transcript_list = self.api.list(video_id)
@@ -18,7 +33,7 @@ class TranscriptClient:
                         "status": "success",
                         "lang": t.language_code,
                         "is_generated": bool(getattr(t, "is_generated", False)),
-                        "text": " ".join([x["text"] for x in data]),
+                        "text": self._join_text(data),
                         "source": "youtube-transcript-api",
                         "error": None,
                     }
@@ -30,7 +45,7 @@ class TranscriptClient:
                 "status": "success",
                 "lang": generated.language_code,
                 "is_generated": True,
-                "text": " ".join([x["text"] for x in data]),
+                "text": self._join_text(data),
                 "source": "youtube-transcript-api",
                 "error": None,
             }
